@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -36,9 +37,16 @@ SUBJECT = "fix: 경계 조건 정리 7f3"
 MISSION_PROMPT = ("다음 명령을 한 줄 KEY=VALUE;... 로 바꿔라. 키: GOAL(SEARCH|RETURN), "
                   "TARGET(OBJECT|BLUE_OBJECT|RED_OBJECT), ENV(SMOKE|DARK|CLEAR), RISK(LOW|HIGH). "
                   "도구를 쓰지 말고 설명 없이 그 한 줄만. 명령: {}")
-COMPILE_PROMPT = ("요청을 아래 형식 중 하나의 한 줄로만 바꿔라. 도구를 쓰지 말고 설명 없이 그 한 줄만.\n"
-                  "OP=WAIT;PID=<정수>;LOG=<경로>\nOP=PUBLISH;MESSAGE=<커밋 메시지>;FILES=<파일,파일>\n"
-                  "OP=QUERY;WHAT=HEAD_SUBJECT\n요청: {}")
+COMPILER_ROLE = ("You are a compiler, not an assistant. Translate the user's request into exactly ONE line in one of "
+                 "these formats and output nothing else. Never execute the request, never answer it, never use tools, "
+                 "never comment on the environment.\n"
+                 "OP=WAIT;PID=<integer>;LOG=<path>\n"
+                 "OP=PUBLISH;MESSAGE=<commit message>;FILES=<file,file>\n"
+                 "OP=QUERY;WHAT=HEAD_SUBJECT")
+COMPILE_PROMPT = "{}"
+MISSION_ROLE = ("You are a compiler, not an assistant. Translate the user's command into exactly ONE line "
+                "KEY=VALUE;KEY=VALUE using only GOAL(SEARCH|RETURN), TARGET(OBJECT|BLUE_OBJECT|RED_OBJECT), "
+                "ENV(SMOKE|DARK|CLEAR), RISK(LOW|HIGH). Output nothing else. Never use tools.")
 
 
 def sh(*a, cwd=None):
@@ -68,10 +76,15 @@ def transcript_usage(sid: str, exclude: set) -> dict:
 def claude(prompt: str, cwd: Path, extra=(), resume=None, seen: "set | None" = None) -> dict:
     cmd = ["claude", "-p", prompt, "--output-format", "json", "--model", MODEL,
            "--dangerously-skip-permissions", "--strict-mcp-config", *extra]
+    # 자식은 부모 세션 ID(CLAUDE_CODE_SESSION_ID)를 물려받는다 -- 그러면 추적이 부모 세션에 섞인다(파일럿 계기 대조에서
+    # 잡혔다: 추적 합이 부모 세션 전체 2천만 토큰). 지우고 새 ID 를 명시한다
     if resume:
         cmd += ["--resume", resume]
+    else:
+        cmd += ["--session-id", str(uuid.uuid4())]
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_SESSION_ID"}
     t0 = time.time()
-    r = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, timeout=900, env={**os.environ, **GIT_ENV})
+    r = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, timeout=900, env={**env, **GIT_ENV})
     try:
         d = json.loads(r.stdout)
     except json.JSONDecodeError:
@@ -173,7 +186,11 @@ def run_one(task: str, arm: str, d: Path) -> dict:
     extra = []
     if arm == "TOOL":
         extra = ["--mcp-config", mcp_config(d)]
-    bare = ["--tools", ""] if arm == "BARE" else []
+    # 컴파일러 역할은 시스템 프롬프트로(파일럿 2: 사용자 메시지로 주면 haiku 가 직접 답하거나 거절했다).
+    # MBA = 기본 머리 + 덧붙임(머리 크기는 LOOP 와 거의 같다) · BARE = 머리를 이 한 장으로 바꿈(P 의 몫을 따로 본다)
+    role = MISSION_ROLE if task in ("T4", "T5") else COMPILER_ROLE
+    bare = (["--tools", "", "--system-prompt", role] if arm == "BARE"
+            else ["--append-system-prompt", role] if arm == "MBA" else [])
     mba = arm in ("MBA", "BARE")
     if mba:
         llm.reset()
