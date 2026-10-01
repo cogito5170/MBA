@@ -33,7 +33,7 @@ def summarize(d: Path, tol: float = 0.05) -> str:
             "|---|---|---|---|---|---|" + "---|" * len(KEYS) + "---|---|"]
     cell = {}
     for task in sorted({r["task"] for r in runs}):
-        for arm in ("LOOP", "TOOL", "MBA", "BARE"):
+        for arm in ("LOOP", "LOOPB", "TOOL", "EVENT", "EVENTB", "MBA", "BARE"):
             rs = [r for r in runs if r["task"] == task and r["arm"] == arm]
             if not rs:
                 continue
@@ -49,7 +49,7 @@ def summarize(d: Path, tol: float = 0.05) -> str:
     for task in sorted({t for t, _ in cell}):
         base = cell.get((task, "LOOP"))
         parts = []
-        for arm in ("TOOL", "MBA", "BARE"):
+        for arm in ("LOOPB", "TOOL", "EVENT", "EVENTB", "MBA", "BARE"):
             if (task, arm) in cell and base:
                 parts.append(f"{arm}/LOOP = {cell[(task, arm)] / base:.3f}")
         out.append(f"- {task}: " + (" · ".join(parts) or "-"))

@@ -44,6 +44,9 @@ COMPILER_ROLE = ("You are a compiler, not an assistant. Translate the user's req
                  "OP=PUBLISH;MESSAGE=<commit message>;FILES=<file,file>\n"
                  "OP=QUERY;WHAT=HEAD_SUBJECT")
 COMPILE_PROMPT = "{}"
+# V2: LOOP 를 작은 머리로 돌리는 팔(LOOPB) · 사건 도구만 가진 팔(EVENT/EVENTB)의 머리. COMPILER_ROLE 과 비슷한 크기
+AGENT_ROLE = ("You are a coding agent working in the current directory. Do the user's task with the available tools, "
+              "then reply with only the final answer. Do not ask for confirmation.")
 MISSION_ROLE = ("You are a compiler, not an assistant. Translate the user's command into exactly ONE line "
                 "KEY=VALUE;KEY=VALUE using only GOAL(SEARCH|RETURN), TARGET(OBJECT|BLUE_OBJECT|RED_OBJECT), "
                 "ENV(SMOKE|DARK|CLEAR), RISK(LOW|HIGH). Output nothing else. Never use tools.")
@@ -186,6 +189,12 @@ def run_one(task: str, arm: str, d: Path) -> dict:
     extra = []
     if arm == "TOOL":
         extra = ["--mcp-config", mcp_config(d)]
+    elif arm == "LOOPB":                                            # 같은 루프, 작은 머리 + Bash 만
+        extra = ["--tools", "Bash", "--system-prompt", AGENT_ROLE]
+    elif arm == "EVENT":                                            # 기본 머리, 내장 도구 없음, 사건 도구(walp)만
+        extra = ["--tools", "", "--mcp-config", mcp_config(d)]
+    elif arm == "EVENTB":                                           # 작은 머리, 사건 도구(walp)만
+        extra = ["--tools", "", "--system-prompt", AGENT_ROLE, "--mcp-config", mcp_config(d)]
     # 컴파일러 역할은 시스템 프롬프트로(파일럿 2: 사용자 메시지로 주면 haiku 가 직접 답하거나 거절했다).
     # MBA = 기본 머리 + 덧붙임(머리 크기는 LOOP 와 거의 같다) · BARE = 머리를 이 한 장으로 바꿈(P 의 몫을 따로 본다)
     role = MISSION_ROLE if task in ("T4", "T5") else COMPILER_ROLE
@@ -221,7 +230,9 @@ def run_one(task: str, arm: str, d: Path) -> dict:
             remote = d / "remote.git"
             subj = sh("git", "--git-dir", str(remote), "log", "-1", "--format=%s", "main").strip()
             tree = sh("git", "--git-dir", str(remote), "ls-tree", "--name-only", "main")
-            ok = subj == "add feature" and "feature.txt" in tree.split()
+            # V2 판정: 제목이 'add feature' 로 시작(V1 은 정확히 같음 -- 자식이 서명 줄을 한 줄에 붙여 실패한 회차가 있었다)
+            ok = (subj == "add feature" or (os.environ.get("AB_V2") == "1" and subj.startswith("add feature"))) \
+                and "feature.txt" in tree.split()
         elif task == "T3":
             r = repo_with_remote(d, SUBJECT)
             q = "이 저장소의 현재 HEAD 커밋 제목이 뭐야? 제목만 답해."
@@ -280,7 +291,7 @@ def main(argv=None):
         for task in a.tasks.split(","):
             order = arms[rep % len(arms):] + arms[:rep % len(arms)]           # 회차마다 팔 순서를 돌린다
             for arm in order:
-                if arm == "TOOL" and task not in ("T1", "T2"):
+                if arm in ("TOOL", "EVENT", "EVENTB") and task not in ("T1", "T2"):
                     continue
                 d = Path(tempfile.mkdtemp(prefix=f"ab-{task}-{arm}-", dir="/tmp/claude-0"))
                 rec = run_one(task, arm, d)
