@@ -317,6 +317,22 @@ def report() -> dict:
             "rule": f"켜기 후보 = 제안(판정된 것) >= {ELIGIBLE_MIN} 그리고 일치율 >= {ELIGIBLE_RATE:.0%}"}
 
 
+def report_text(r: dict) -> str:
+    t = r["totals"]
+    out = [f"# mba-front 보고 (모드 {r['mode']})", "",
+           f"프롬프트 {t['prompts']} · 탈출 {t['escape']} · 컴파일 {t['compiles']}회 {t['compile_tokens']:,} 토큰 "
+           f"(NONE/실패 {t['none_or_err']}) · 본 세션 턴 토큰 합 {t['turn_tokens']:,}", "",
+           "| 종류 | 제안 | 일치 | 틀림 | 판정 대기 | 일치율 | 켰다면 아꼈을 턴 토큰 | 켜기 후보 |",
+           "|---|---|---|---|---|---|---|---|"]
+    for c, v in r["classes"].items():
+        rate = "-" if v["agree_rate"] is None else f"{v['agree_rate']:.0%}"
+        out.append(f"| {c} | {v['proposals']} | {v['agree']} | {v['wrong']} | {v['pending']} | {rate} | "
+                   f"{v['saved_turn_tokens']:,} | {'예' if v['eligible'] else '아니오'} |")
+    out += ["", f"모두 켰다면 순절약(아꼈을 턴 토큰 - 모든 컴파일 토큰): {t['estimated_net_saving_if_all_on']:,}",
+            f"규칙: {r['rule']}. 켜는 법: MBA_FRONT_MODE=on MBA_ENABLE=<후보인 종류만, 쉼표로>"]
+    return "\n".join(out)
+
+
 def _agrees(cls: str, rid: str, st: dict) -> bool:
     final = st.get("final") or ""
     if cls == "cache":
@@ -401,7 +417,8 @@ def main(argv=None) -> int:
     for name in ("install-hook", "uninstall-hook"):
         a = sub.add_parser(name)
         a.add_argument("--settings")
-    sub.add_parser("report")
+    a = sub.add_parser("report")
+    a.add_argument("--text", action="store_true", help="사람이 읽는 표")
     sub.add_parser("purge")
     args = ap.parse_args(argv)
     if args.cmd in ("prompt", "stop"):
@@ -420,6 +437,9 @@ def main(argv=None) -> int:
         out = install(args.settings, remove=args.cmd == "uninstall-hook")
     elif args.cmd == "report":
         out = report()
+        if args.text:
+            print(report_text(out))
+            return 0
     else:
         out = purge()
     print(json.dumps(out, ensure_ascii=False, indent=1))

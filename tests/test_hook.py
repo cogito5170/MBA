@@ -108,10 +108,11 @@ class Shadow(Base):
         self.assertNotIn("HEAD 커밋", (self.d / "home" / "ledger.jsonl").read_text())   # 원장에 글은 없다
 
     def test_캐시는_읽기만_한_턴에서만_채운다(self):
-        self.turn("파일 하나 만들어줘", "만들었다", change=True)
+        self.turn("파일 하나 만들어줘", "만들었다", change=True)               # 그 턴에 저장소를 바꿨다
+        (self.repo / "b.txt").unlink()                                           # 상태가 프롬프트 때로 되돌아와도
         self.turn("파일 하나 만들어줘", "만들었다")
         paths = [r["path"] for r in self.ledger() if r["e"] == "prompt"]
-        self.assertEqual(paths, ["pass", "pass"])
+        self.assertEqual(paths, ["pass", "pass"])                                # 바꾼 턴의 답은 캐시에 없다
 
     def test_상태가_바뀌면_캐시를_안_쓴다(self):
         self.turn("HEAD 커밋 제목이 뭐야?", SUBJECT)
@@ -161,11 +162,22 @@ class Compile(Base):
         self.assertFalse((self.d / "home" / "pending" / f"{rid}.prompt.json").exists())   # 프롬프트 글은 지운다
 
     def test_WAIT_PUBLISH_는_그림자에서_실행하지_않는다(self):
-        os.environ["MBA_CLAUDE_BIN"] = str(fake_claude(self.d, "OP=PUBLISH;MESSAGE=x;FILES=a.txt"))
-        (self.d / "home" / "pending").mkdir(parents=True)
-        (self.d / "home" / "pending" / "r1.prompt.json").write_text(json.dumps({"prompt": "밀어줘", "cwd": str(self.repo)}))
-        res = hook.compile_bg("r1")
-        self.assertEqual((res["op"], res["answer"]), ("PUBLISH", None))
+        # 허락 목록이 있어도 · 실행기가 성공해도 그림자는 부르지 않아야 한다 -- 실행기 호출 자체를 센다
+        os.environ["MBA_ALLOW_PUBLISH"] = str(self.repo.resolve())
+        called = []
+        orig = ops.execute
+        ops.execute = lambda op, cwd, **k: called.append(op["OP"]) or "실행됨"
+        try:
+            for i, line in enumerate(["OP=PUBLISH;MESSAGE=x;FILES=a.txt", "OP=WAIT;PID=1;LOG=/tmp/x.log"]):
+                os.environ["MBA_CLAUDE_BIN"] = str(fake_claude(self.d, line))
+                (self.d / "home" / "pending").mkdir(parents=True, exist_ok=True)
+                (self.d / "home" / "pending" / f"r{i}.prompt.json").write_text(
+                    json.dumps({"prompt": "밀어줘", "cwd": str(self.repo)}))
+                res = hook.compile_bg(f"r{i}")
+                self.assertEqual(res["answer"], None)
+        finally:
+            ops.execute = orig
+        self.assertEqual(called, [])
         self.assertEqual(subprocess.run(["git", "-C", str(self.repo), "log", "--oneline"], capture_output=True,
                                         text=True).stdout.count("\n"), 1)        # 커밋도 안 했다
 
@@ -175,6 +187,17 @@ class Compile(Base):
             (self.d / "home" / "pending").mkdir(parents=True, exist_ok=True)
             (self.d / "home" / "pending" / f"n{i}.prompt.json").write_text(json.dumps({"prompt": "x", "cwd": str(self.repo)}))
             self.assertNotIn(hook.compile_bg(f"n{i}")["op"], ("QUERY", "WAIT", "PUBLISH"))
+
+
+class ChildHygiene(Base):
+    def test_컴파일_자식은_훅을_끄고_부모_세션_ID_를_안_받는다(self):
+        from mba.front import compiler
+        os.environ.pop("MBA_FRONT_MODE", None)                                  # 부모가 off 를 안 줘도
+        os.environ["CLAUDE_CODE_SESSION_ID"] = "부모"
+        os.environ["MBA_CLAUDE_BIN"] = str(fake_claude(self.d, "OP=NONE"))
+        compiler.compile_request("x", self.repo)
+        call = json.loads((self.d / "claude_calls.jsonl").read_text().splitlines()[-1])
+        self.assertEqual((call["mode"], call["parent_sid"]), ("off", False))
 
 
 class On(Base):
@@ -239,6 +262,8 @@ class Report(Base):
         self.assertTrue(c["eligible"])
         self.assertEqual(c["saved_turn_tokens"], 10 * 12000)
         self.assertEqual(r["totals"]["estimated_net_saving_if_all_on"], 120000)
+        txt = hook.report_text(r)
+        self.assertIn("| cache | 10 | 10 | 0 | 0 | 100% | 120,000 | 예 |", txt)
 
     def test_캐시가_틀리면_틀림으로_센다(self):
         self.turn("HEAD 커밋 제목이 뭐야?", SUBJECT)
