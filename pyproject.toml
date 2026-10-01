@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mba"
+version = "0.1.0"
+description = "MBA — 토큰을 최소로 쓰는 모델 기반 자율: LLM 은 자연어를 기호 임무로 바꾸는 컴파일러로만, 코어 주기는 LLM 호출 0"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.setuptools]
+packages = ["mba", "mba.core", "mba.ir", "mba.front"]

@@ -1,0 +1,64 @@
+# 플랜트 = LLM 에이전트 루프(Claude Code). 턴 경계마다 한 주기. 고장 모드 = 토큰을 먹는 자리.
+#
+# 잰 것(walp/docs/실행정책층/추적_이세션.json · 그림자_재생_주세션.json, 세션 하나 · 상한):
+#   턴당 맥락 평균 419k, 캐시 읽기 98.6% -> "턴 하나 = 맥락 전체를 다시 읽는다"
+#   stop 훅이 부른 턴 9.3% · 루틴 연쇄 덧턴 13.8% · 기다리기 11.1%
+#   재생 상한 P1 3.6% · P2 9.6% · P3 6.8% (겹칠 수 있어 더하지 않는다)
+# 그래서 행동의 토큰 값(τ)은 "그 턴의 맥락" 이다 -- 센서 ctx.tokens 에서 읽는다.
+
+SYMBOL C01 HOOK_LOOP "같은 훅 말 -> 같은 답";  SYMBOL C02 WAITER "기다리기";
+SYMBOL C03 PUBLISHER "커밋 -> 발행 연쇄";       SYMBOL C04 TOOLS "같은 도구 호출";
+SYMBOL C06 REPO "저장소 상태";
+SYMBOL F01 ANSWER_ECHO;  SYMBOL F02 POLLING;  SYMBOL F03 ROUTINE_CHAIN;  SYMBOL F04 DUP_CALL;
+SYMBOL F06 STATE_UNKNOWN;
+
+# 센서 (훅 · 추적 · git 에서 토큰 없이 잰 원자료 -- mba.front.sensors)
+OBSERVE S10 STATE_KNOWN    = repo.state_known == 1;      # 상태 해시를 잴 수 있다(git 저장소)
+OBSERVE S12 STATE_SAME     = repo.state_same == 1;       # 직전 결론 때의 상태 해시와 같다
+OBSERVE S11 PROMPT_REPEAT  = prompt.repeat == 1;         # 같은 말(정규화 해시)을 전에 받았고 그 턴이 끝났다
+OBSERVE S13 DUP_CALL_SEEN  = tool.dup == 1;              # 같은 도구 · 같은 입력을 같은 상태에서 이미 불렀다
+OBSERVE S14 POLLING_SEEN   = tool.poll_streak >= 1;      # 직전 턴이 기다리기(kill -0 · sleep)였다
+OBSERVE S15 PROC_ALIVE     = proc.alive == 1;            # 기다리는 프로세스가 아직 돈다(PID)
+OBSERVE S16 UNPUBLISHED    = repo.commit_unpublished == 1;
+OBSERVE S17 P_CORRECT_HIGH = llm.p_correct > 0.8;        # LLM 이 이 자리에서 맞힐 확률 -- 같으면(0.8) 거짓
+OBSERVE S18 PUBLISH_OK     = policy.publish_allowed == 1;
+
+COMPONENT C06 REPO { MODES NOMINAL PRIOR 0, F06 PRIOR 1; OBSERVED_BY S10, S12;
+                     PREDICT NOMINAL: S10;  PREDICT F06: !S10; }
+COMPONENT C01 HOOK_LOOP { MODES NOMINAL PRIOR 0, F01 PRIOR 1; DEPENDS ON C06; OBSERVED_BY S11;
+                          PREDICT NOMINAL: !(S11 & S12);  PREDICT F01: S11 & S12; }
+COMPONENT C04 TOOLS { MODES NOMINAL PRIOR 0, F04 PRIOR 1; DEPENDS ON C06; OBSERVED_BY S13;
+                      PREDICT NOMINAL: !(S13 & S12);  PREDICT F04: S13 & S12; }
+COMPONENT C02 WAITER { MODES NOMINAL PRIOR 0, F02 PRIOR 1; OBSERVED_BY S14, S15;
+                       PREDICT NOMINAL: !(S14 & S15);  PREDICT F02: S14 & S15; }
+COMPONENT C03 PUBLISHER { MODES NOMINAL PRIOR 0, F03 PRIOR 1; OBSERVED_BY S16;
+                          PREDICT NOMINAL: !S16;  PREDICT F03: S16; }
+
+# 진단 -> 정책 비트. 재사용은 저장소 상태를 잴 수 있을 때만(모르면 재사용하지 않는다)
+DERIVE S40 REUSE_SAFE  = MODE(C01) == F01 & MODE(C06) == NOMINAL;
+DERIVE S41 DEDUP_SAFE  = MODE(C04) == F04 & MODE(C06) == NOMINAL;
+DERIVE S42 WAIT_EVENT  = MODE(C02) == F02;
+DERIVE S43 CHAIN_OPEN  = MODE(C03) == F03;
+
+SYMBOL A00 CALL_LLM "보통 턴";       SYMBOL A01 REUSE_PREV "P1 직전 결론";
+SYMBOL A02 CACHED_TOOL "같은 호출의 결과";  SYMBOL A03 WAIT_EVENT "P3 끝나면 한 번";
+SYMBOL A04 PUBLISH_MACRO "P2 한 번에";      SYMBOL A05 ASK_HUMAN "LLM 이 못 맞힐 자리";
+
+BEHAVIOR B20 REUSE  PRIORITY 20 { RULE R20 WHEN S40 DO A01; }
+BEHAVIOR B21 DEDUP  PRIORITY 21 { RULE R21 WHEN S41 DO A02; }
+BEHAVIOR B30 WAIT   PRIORITY 30 { RULE R30 WHEN S42 DO A03; }
+BEHAVIOR B40 MACRO  PRIORITY 40 { RULE R40 WHEN S43 DO A04; }
+BEHAVIOR B90 LLM    PRIORITY 90 { RULE R90 WHEN TRUE DO A00; }
+
+ARBITRATION B20 > B21 > B30 > B40 > B90;
+
+SAFETY {
+    VETO A04       WHEN !S18 REASON OUTWARD_NOT_ALLOWED;     # 밀기 · 머지는 허락된 곳에서만
+    VETO A01, A02  WHEN !S10 REASON STATE_UNKNOWN;
+    VETO A00       WHEN !S17 REASON LLM_UNLIKELY_CORRECT;    # 맞힐 확률이 문턱을 못 넘으면 부르지 않는다
+    FALLBACK WHEN TRUE DO A05;
+}
+
+# 토큰 값 τ: 보통 턴은 그 턴의 맥락 전체, 매크로는 요약 한 줄이 다음 턴에 실리는 몫, 나머지는 0
+COST A00 TOKENS CHANNEL ctx.tokens;
+COST A04 TOKENS 200;
