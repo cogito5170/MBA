@@ -9,5 +9,8 @@ description = "MBA — 토큰을 최소로 쓰는 모델 기반 자율: LLM 은 
 requires-python = ">=3.10"
 dependencies = []
 
+[project.scripts]
+mba-front = "mba.front.hook:main"
+
 [tool.setuptools]
 packages = ["mba", "mba.core", "mba.ir", "mba.front"]
