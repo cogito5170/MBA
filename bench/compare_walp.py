@@ -103,6 +103,8 @@ def baseline(out: Path) -> list:
         rows.append({"i": i, "text": text, "cls": cls, "before": before, "after": after, **c})
         print(f"BASE {i:2} {cls:6} tok={c['tokens']:>6} {c['latency']:>5}s err={c['is_error']} {c['answer'][:50]!r}",
               flush=True)
+        if c["is_error"]:                                    # 무효 실행 1 의 교훈: 오류를 보고도 끝까지 돌지 않는다
+            raise SystemExit(f"기준선 {i} 번이 오류로 끝났다 -- 실행을 멈춘다: {c['answer'][:120]!r}")
     (out / "baseline.jsonl").write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n")
     (out / "repo_path").write_text(str(repo))
     return rows
