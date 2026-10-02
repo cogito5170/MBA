@@ -17,6 +17,14 @@ walp-front 와 같은 프롬프트 24 개로 비교한 결과(`docs/PREREG_비�
 틀린 가로챔 0 대 3**(walp-front 는 섞인 말 · 저장소 질문에서 사람의 요청을 잃었다). 그래서 Claude 앞단으로 **MBA 를 쓴다.**
 단 잡담은 walp-front 가 낫고(7/7 토큰 0), MBA 는 컴파일 때문에 더 느리다. 근거의 범위는 결정 문서에 적었다.
 
+## MBA-frontend — 잰 설정 그대로 한 줄로 (`docs/MBA-frontend.md`)
+
+```bash
+mba-frontend install-hook      # mba-front 를 on · cache,QUERY · 컴파일 사전 (9,1) 로 -- 비교의 MBA-1
+```
+
+같은 24 프롬프트에서 **정확도 23/23 · 틀린 가로챔 0 · 토큰 절감 49.1%**(walp-front 고친 것 21/23 · 31.4%). 대신 느리고(컴파일 4~5 초) 잡담은 못 거른다.
+
 ## mba-front — Claude Code 의 모든 프롬프트 앞에
 
 ```

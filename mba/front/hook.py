@@ -351,7 +351,7 @@ def _agrees(cls: str, rid: str, st: dict) -> bool:
 
 # ---------------- 설치 ----------------
 
-_OURS = re.compile(r'(mba-front"?|mba\.front\.hook"?)\s+(prompt|stop)\b')
+_OURS = re.compile(r'(mba-front(?:end)?"?|mba\.front\.(?:hook|frontend)"?)\s+(prompt|stop)\b')   # mba-front · mba-frontend 는 하나만
 
 
 def _command(which: str) -> str:
@@ -361,7 +361,7 @@ def _command(which: str) -> str:
     return f'PYTHONPATH="{ROOT}" "{sys.executable}" -m mba.front.hook {which}'
 
 
-def install(settings=None, remove: bool = False) -> dict:
+def install(settings=None, remove: bool = False, command=None) -> dict:
     """UserPromptSubmit · Stop 에 우리 훅을 **제자리에 하나만**. 남의 훅은 그대로, 바꾸기 전 것은 .bak-mba."""
     p = Path(settings or Path.home() / ".claude" / "settings.json").expanduser()
     text = p.read_text(encoding="utf-8") if p.is_file() else ""
@@ -370,7 +370,7 @@ def install(settings=None, remove: bool = False) -> dict:
     hooks = d.setdefault("hooks", {})
     for ev, which, timeout in (("UserPromptSubmit", "prompt", 30), ("Stop", "stop", 30)):
         groups = hooks.setdefault(ev, [])
-        entry = {"type": "command", "command": _command(which), "timeout": timeout}
+        entry = {"type": "command", "command": (command or _command)(which), "timeout": timeout}
         placed = False
         for g in groups:
             keep = []
